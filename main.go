@@ -25,6 +25,7 @@ func init() {
 		FullTimestamp:   true,
 		TimestampFormat: "2006-01-02 15:04:05",
 	})
+	// log.SetLevel(log.DebugLevel)
 }
 
 func main() {
@@ -60,8 +61,8 @@ func NewTenseiBot() *TenseiBot {
 
 // Close closing everything
 func (tb *TenseiBot) Close() {
-	tb.db.Close()
-	tb.Discord.c.Close()
+	_ = tb.db.Close()
+	_ = tb.Discord.c.Close()
 	tb.Google.ctxCancelFunc()
-	tb.Google.TranslateClient.Close()
+	_ = tb.Google.TranslateClient.Close()
 }

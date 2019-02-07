@@ -39,12 +39,13 @@ type Cooldowns struct {
 }
 
 // SetupDiscordCommands ...
-func (tb *TenseiBot) SetupDiscordCommands() {
+func (tb *TenseiBot) SetupDiscordCommands(prefix string) {
 	tb.Discord.commands = map[string]command{
-		"!tr":     command{f: discordTranslate(tb), cds: make(map[string]time.Time)},
-		"!twitch": command{f: discordTwitch(tb), cds: make(map[string]time.Time)},
-		"!uptime": command{f: discordUptime(tb), cds: make(map[string]time.Time)},
-		"!stats":  command{f: discordStats(tb), cds: make(map[string]time.Time)},
+		prefix + "tr":     {f: discordTranslate(tb), cds: make(map[string]time.Time)},
+		prefix + "twitch": {f: discordTwitch(tb), cds: make(map[string]time.Time)},
+		prefix + "uptime": {f: discordUptime(tb), cds: make(map[string]time.Time)},
+		prefix + "stats":  {f: discordStats(tb), cds: make(map[string]time.Time)},
+		prefix + "tb":     {f: discordTenseiBot(tb), cds: make(map[string]time.Time)},
 	}
 }
 
@@ -63,6 +64,8 @@ func (tb *TenseiBot) NewDiscord() {
 	tb.Discord.msgCacheLimit = 1000
 	tb.Discord.msgCache = []*discordgo.Message{}
 	tb.Discord.cooldowns = make(map[string]*Cooldowns)
+	tb.Discord.prefix = tb.Config.Discord.Prefix
+	tb.Discord.c = s
 
 	s.AddHandler(tb.CommandHandler)
 	s.AddHandler(tb.GuildCreate)
@@ -71,15 +74,13 @@ func (tb *TenseiBot) NewDiscord() {
 	s.AddHandler(tb.GuildMemberUpdate)
 	s.AddHandler(tb.MessageDelete)
 
-	tb.SetupDiscordCommands()
+	tb.SetupDiscordCommands(tb.Config.Discord.Prefix)
 
 	err = s.Open()
 	if err != nil {
 		log.Fatalf("failed opening connection to discord: %v", err)
 	}
 
-	tb.Discord.c = s
-	tb.Discord.prefix = tb.Config.Discord.Prefix
 	log.Info("[MODULE] discord loaded")
 }
 
@@ -136,13 +137,25 @@ func (tb *TenseiBot) isOwner(id string) bool {
 	return tb.Config.Discord.OwnerID == id
 }
 
-func (tb *TenseiBot) isDiscordCommandOnCD(cmnd, chID, gID, aID string, t int64) bool {
-	if tb.isOwner(aID) {
+func isServerAdmin(guild Guild, member *discordgo.Member) bool {
+	if guild.OwnerID == member.User.ID {
+		return true
+	}
+	return contains(member.Roles, guild.AdminRoleID)
+}
+
+func (tb *TenseiBot) isDiscordCommandOnCD(cmd, chID string, member *discordgo.Member, t int64, guildSetting Guild) bool {
+	if tb.isOwner(member.User.ID) {
 		return false
 	}
-	cd := tb.Discord.getCooldown(cmnd, chID)
+	// don't check cooldown when member has the admin role
+	if isServerAdmin(guildSetting, member) {
+		return false
+	}
+
+	cd := tb.Discord.getCooldown(cmd, chID)
 	if time.Now().After(cd) {
-		tb.Discord.setCooldown(cmnd, chID, time.Now().Add(time.Duration(t)*time.Second))
+		tb.Discord.setCooldown(cmd, chID, time.Now().Add(time.Duration(t)*time.Second))
 		return false
 	}
 	return true
@@ -151,7 +164,8 @@ func (tb *TenseiBot) isDiscordCommandOnCD(cmnd, chID, gID, aID string, t int64) 
 func discordTranslate(tb *TenseiBot) func(s *discordgo.Session, m *discordgo.MessageCreate, command string) {
 	return func(s *discordgo.Session, m *discordgo.MessageCreate, command string) {
 		set := tb.GetGuildSettingsFromDB(m.GuildID)
-		if tb.isDiscordCommandOnCD(command, m.ChannelID, m.GuildID, m.Author.ID, *set.TranslateCooldown) {
+		member, _ := s.GuildMember(m.GuildID, m.Author.ID)
+		if tb.isDiscordCommandOnCD(command, m.ChannelID, member, *set.TranslateCooldown, set) {
 			log.Debugf("[COMMAND] %s is on cd", command)
 			return
 		}
@@ -169,7 +183,7 @@ func discordTranslate(tb *TenseiBot) func(s *discordgo.Session, m *discordgo.Mes
 
 		target := strings.TrimSpace(parts[1])
 
-		// if user didn't use the right language format get it from the supported list
+		// if member didn't use the right language format get it from the supported list
 		if len(target) > 2 && len(tb.Google.supportedLanguages) > 0 {
 			for _, l := range tb.Google.supportedLanguages {
 				if strings.EqualFold(target, l.Name) {
@@ -185,14 +199,14 @@ func discordTranslate(tb *TenseiBot) func(s *discordgo.Session, m *discordgo.Mes
 			return
 		}
 
-		s.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
+		_, _ = s.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
 			Fields: []*discordgo.MessageEmbedField{
-				&discordgo.MessageEmbedField{
+				{
 					Name:   "Input",
 					Value:  text,
 					Inline: false,
 				},
-				&discordgo.MessageEmbedField{
+				{
 					Name:   "Output",
 					Value:  output,
 					Inline: false,
@@ -210,14 +224,14 @@ func discordUptime(tb *TenseiBot) func(s *discordgo.Session, m *discordgo.Messag
 		if m.Author.ID != tb.Config.Discord.OwnerID {
 			return
 		}
-		s.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
+		_, _ = s.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
 			Fields: []*discordgo.MessageEmbedField{
-				&discordgo.MessageEmbedField{
+				{
 					Name:   "Started",
 					Value:  tb.started.Format(time.Stamp),
 					Inline: true,
 				},
-				&discordgo.MessageEmbedField{
+				{
 					Name:   "Uptime",
 					Value:  fmt.Sprintf("%s", time.Since(tb.started)),
 					Inline: true,
@@ -229,7 +243,7 @@ func discordUptime(tb *TenseiBot) func(s *discordgo.Session, m *discordgo.Messag
 
 func discordStats(tb *TenseiBot) func(s *discordgo.Session, m *discordgo.MessageCreate, command string) {
 	return func(s *discordgo.Session, m *discordgo.MessageCreate, command string) {
-		if m.Author.ID != tb.Config.Discord.OwnerID {
+		if !tb.isOwner(m.Author.ID) {
 			return
 		}
 		guilds := len(s.State.Guilds)
@@ -238,15 +252,15 @@ func discordStats(tb *TenseiBot) func(s *discordgo.Session, m *discordgo.Message
 			users += len(g.Members)
 		}
 
-		s.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
+		_, _ = s.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
 			Title: "Stats",
 			Fields: []*discordgo.MessageEmbedField{
-				&discordgo.MessageEmbedField{
+				{
 					Name:   "Guilds",
 					Value:  fmt.Sprintf("%d", guilds),
 					Inline: true,
 				},
-				&discordgo.MessageEmbedField{
+				{
 					Name:   "Users",
 					Value:  fmt.Sprintf("%d", users),
 					Inline: true,
@@ -259,44 +273,114 @@ func discordStats(tb *TenseiBot) func(s *discordgo.Session, m *discordgo.Message
 func discordTwitch(tb *TenseiBot) func(s *discordgo.Session, m *discordgo.MessageCreate, command string) {
 	return func(s *discordgo.Session, m *discordgo.MessageCreate, command string) {
 		set := tb.GetGuildSettingsFromDB(m.GuildID)
-		parts := strings.SplitN(m.Content, " ", 3)
+		member, _ := s.GuildMember(m.GuildID, m.Author.ID)
+		if tb.isDiscordCommandOnCD(command, m.ChannelID, member, *set.TwitchCooldown, set) {
+			return
+		}
+		parts := strings.Split(m.Content, " ")
+		if len(parts) < 3 {
+			return
+		}
 		switch parts[1] {
 		case "id":
-			// get user id
-			if tb.isDiscordCommandOnCD(command, m.ChannelID, m.GuildID, m.Author.ID, *set.TwitchCooldown) {
+			// get member id
+			if tb.isDiscordCommandOnCD(command, m.ChannelID, member, *set.TwitchCooldown, set) {
 				log.Debugf("[COMMAND] %s is on cd", command)
 				return
 			}
 			tb.Twitch.discordGetUserTwitchID(s, m, parts[2])
 		case "name":
-			// get user name
-			if tb.isDiscordCommandOnCD(command, m.ChannelID, m.GuildID, m.Author.ID, *set.TwitchCooldown) {
+			// get member name
+			if tb.isDiscordCommandOnCD(command, m.ChannelID, member, *set.TwitchCooldown, set) {
 				log.Debugf("[COMMAND] %s is on cd", command)
 				return
 			}
 			tb.Twitch.discordGetUserTwitchName(s, m, parts[2])
 		case "add":
 			// add stuff
-		case "reomove":
+			if !isServerAdmin(set, member) {
+				return
+			}
+			streamer, err := tb.GetStreamerWithName(parts[2])
+			if err != nil {
+				log.Warn(err)
+				users, err := tb.Twitch.GetUsers(nil, []string{parts[2]})
+				if err != nil {
+					log.Warn(err)
+					return
+				}
+				user := users[0]
+				streamer = &TwitchStreamer{
+					Name:            strings.ToLower(user.DisplayName),
+					ChannelID:       user.ID,
+					ProfileImageURL: user.ProfileImageURL,
+				}
+				tb.AddStreamer(streamer)
+				tb.Twitch.RateLimitMutex.Lock()
+				tb.Twitch.TwitchStreamers = append(tb.Twitch.TwitchStreamers, streamer)
+				tb.Twitch.RateLimitMutex.Unlock()
+			}
+			if !strings.HasPrefix(parts[3], "<#") {
+				return
+			}
+			channelID := parts[3][2 : len(parts[3])-1]
+			if hasAlertSubscription(streamer, channelID) {
+				return
+			}
+			channel, err := s.Channel(channelID)
+			if err != nil {
+				DiscordSendErrorMessageEmbed(s, m.ChannelID, "couldn't find channel with id: %s, err: %v", channelID, err)
+				return
+			}
+			// make sure the channel is on the same server
+			if channel.GuildID == m.GuildID {
+				streamer.TwitchAlertSubscriptions = append(streamer.TwitchAlertSubscriptions, &TwitchAlertSubscription{
+					ChannelID: channelID,
+					GuildID:   m.GuildID,
+				})
+				tb.UpdateStreamer(streamer)
+				DiscordSendSuccessMessageEmbed(s, m.ChannelID, "added %s alert to channel %s", streamer.Name, channel.Mention())
+			} else {
+				DiscordSendErrorMessageEmbed(s, m.ChannelID, "can't add channel on other server")
+			}
+		case "remove":
 			// remove stuff
+			if !isServerAdmin(set, member) {
+				return
+			}
+		case "online":
+			streamer := parts[2]
+			streams, err := tb.Twitch.getStream(nil, []string{streamer})
+			if err != nil {
+				log.Warn(err)
+				return
+			}
+			if len(streams) > 0 {
+				DiscordSendSuccessMessageEmbed(s, m.ChannelID, fmt.Sprintf("%s stream is currently %v", streamer, isStreaming(&streams[0])))
+			} else {
+				DiscordSendErrorMessageEmbed(s, m.ChannelID, fmt.Sprintf("%s stream is currently offline", streamer))
+			}
 		}
 	}
 }
 
 func (tt *TenseiTwitch) discordGetUserTwitchID(s *discordgo.Session, m *discordgo.MessageCreate, name string) {
-	users := tt.GetUsers(nil, []string{name})
+	users, err := tt.GetUsers(nil, []string{name})
+	if err != nil {
+		log.Warn(err)
+	}
 	if len(users) < 1 {
 		return
 	}
 	user := users[0]
-	s.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
+	_, _ = s.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
 		Title: user.DisplayName,
 		URL:   fmt.Sprintf("https://twitch.tv/%s", user.DisplayName),
 		Thumbnail: &discordgo.MessageEmbedThumbnail{
 			URL: user.ProfileImageURL,
 		},
 		Fields: []*discordgo.MessageEmbedField{
-			&discordgo.MessageEmbedField{
+			{
 				Name:  "ID",
 				Value: user.ID,
 			},
@@ -305,22 +389,49 @@ func (tt *TenseiTwitch) discordGetUserTwitchID(s *discordgo.Session, m *discordg
 }
 
 func (tt *TenseiTwitch) discordGetUserTwitchName(s *discordgo.Session, m *discordgo.MessageCreate, id string) {
-	users := tt.GetUsers([]string{id}, nil)
+	users, err := tt.GetUsers([]string{id}, nil)
+	if err != nil {
+		log.Warn(err)
+		return
+	}
 	if len(users) < 1 {
 		return
 	}
 	user := users[0]
-	s.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
+	_, _ = s.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
 		Title: user.ID,
 		URL:   fmt.Sprintf("https://twitch.tv/%s", user.DisplayName),
 		Thumbnail: &discordgo.MessageEmbedThumbnail{
 			URL: user.ProfileImageURL,
 		},
 		Fields: []*discordgo.MessageEmbedField{
-			&discordgo.MessageEmbedField{
+			{
 				Name:  "Name",
 				Value: user.DisplayName,
 			},
 		},
 	})
+}
+
+func discordTenseiBot(tb *TenseiBot) func(s *discordgo.Session, m *discordgo.MessageCreate, command string) {
+	return func(s *discordgo.Session, m *discordgo.MessageCreate, command string) {
+		guild, _ := s.Guild(m.GuildID)
+		if m.Author.ID != guild.OwnerID && !tb.isOwner(m.Author.ID) {
+			return
+		}
+		set := tb.GetGuildSettingsFromDB(m.GuildID)
+		args := strings.Split(m.Content, " ")[1:]
+		switch args[0] {
+		case "set":
+			switch args[1] {
+			case "adminrole":
+				_, _ = s.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
+					Description: fmt.Sprintf("updating admin_role_id from '%s' to '%s'", set.AdminRoleID, args[2]),
+				})
+				set.AdminRoleID = args[2]
+				tb.UpdateGuildSettings(set)
+				return
+			}
+		}
+	}
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -28,6 +30,35 @@ type Guild struct {
 	TwitchCooldown    *int64 `gorm:"default:3"`
 }
 
+// TwitchStreamer stores data about a streamer
+type TwitchStreamer struct {
+	ID        uint `gorm:"primary_key"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+
+	Name            string
+	ChannelID       string
+	ProfileImageURL string
+
+	StreamStartTime time.Time
+	StreamEndTime   time.Time
+
+	TwitchAlertSubscriptions []*TwitchAlertSubscription
+}
+
+// TwitchAlertSubscription ...
+type TwitchAlertSubscription struct {
+	ID        uint `gorm:"primary_key"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+
+	MessageID string
+	ChannelID string
+	GuildID   string
+
+	TwitchStreamerID uint
+}
+
 // NewDatabase create/opens a database
 func (tb *TenseiBot) NewDatabase() {
 	db := tb.Config.Database.ConnectionString
@@ -44,6 +75,8 @@ func (tb *TenseiBot) NewDatabase() {
 	}
 
 	tb.db.AutoMigrate(&Guild{})
+	tb.db.AutoMigrate(&TwitchStreamer{})
+	tb.db.AutoMigrate(&TwitchAlertSubscription{})
 
 	log.Info("[MODULE] database loaded")
 }
@@ -74,4 +107,46 @@ func (tb *TenseiBot) GetGuildSettingsFromDB(id string) Guild {
 	var dbg Guild
 	tb.db.Where("id = ?", id).First(&dbg)
 	return dbg
+}
+
+// UpdateGuildSettings change TranslateCooldown for guild
+func (tb *TenseiBot) UpdateGuildSettings(g Guild) {
+	tb.db.Save(&g)
+}
+
+// AddStreamer adds a new streamer to the database
+func (tb *TenseiBot) AddStreamer(streamer *TwitchStreamer) {
+	tb.db.Create(streamer)
+}
+
+// GetStreamers returns a list of all TwitchStreamers in the database
+func (tb *TenseiBot) GetStreamers() []*TwitchStreamer {
+	var streamers []*TwitchStreamer
+	tb.db.Set("gorm:auto_preload", true).Find(&streamers)
+	return streamers
+}
+
+// UpdateStreamer updates streamer in database
+func (tb *TenseiBot) UpdateStreamer(streamer *TwitchStreamer) {
+	tb.db.Save(streamer)
+}
+
+// GetStreamerWithID returns the streamer given the id
+func (tb *TenseiBot) GetStreamerWithID(id string) (*TwitchStreamer, error) {
+	var streamer TwitchStreamer
+	tb.db.Set("gorm:auto_preload", true).Where("channel_id = ?", id).First(&streamer)
+	if !strings.EqualFold(streamer.ChannelID, id) {
+		return nil, fmt.Errorf("[DATABASE] no streamer with id: %s found", id)
+	}
+	return &streamer, nil
+}
+
+// GetStreamerWithName return the streamer given the name
+func (tb *TenseiBot) GetStreamerWithName(name string) (*TwitchStreamer, error) {
+	var streamer TwitchStreamer
+	tb.db.Set("gorm:auto_preload", true).Where("name = ?", strings.ToLower(name)).First(&streamer)
+	if !strings.EqualFold(streamer.Name, name) {
+		return nil, fmt.Errorf("[DATABASE] no streamer with name: %s found", name)
+	}
+	return &streamer, nil
 }
