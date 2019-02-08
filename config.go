@@ -1,39 +1,33 @@
 package main
 
 import (
-	"encoding/json"
-	"io/ioutil"
-
+	"github.com/BurntSushi/toml"
 	log "github.com/sirupsen/logrus"
 )
 
 // TenseiConfig ...
 type TenseiConfig struct {
 	Google struct {
-		APIKey string `json:"apiKey"`
-	} `json:"google"`
+		APIKey string `toml:"api_key"`
+	} `toml:"google"`
 	Discord struct {
-		Prefix  string `json:"prefix"`
-		Token   string `json:"token"`
-		OwnerID string `json:"ownerID"`
-	} `json:"discord"`
+		Prefix  string `toml:"prefix"`
+		Token   string `toml:"token"`
+		OwnerID string `toml:"owner_id"`
+	} `toml:"discord"`
 	Twitch struct {
-		ClientID string `json:"clientID"`
-	} `json:"twitch"`
+		ClientID string `toml:"client_id"`
+	} `toml:"twitch"`
 	Database struct {
-		Dialect          string `json:"dialect"`
-		ConnectionString string `json:"connectionString"`
-	} `json:"database"`
+		Dialect          string `toml:"dialect"`
+		ConnectionString string `toml:"connection_string"`
+	} `toml:"database"`
 }
 
 // Load loads config file
 func (tc *TenseiConfig) Load(file string) {
-	b, err := ioutil.ReadFile(file)
+	_, err := toml.DecodeFile(file, &tc)
 	if err != nil {
-		log.Fatalf("[CONFIG] failed reading file %s: %v", file, err)
-	}
-	err = json.Unmarshal(b, &tc)
-	if err != nil {
-		log.Fatalf("[CONFIG] failed unmarshaling file %s: %v", file, err)
+		log.Fatalf("[CONFIG] failed decoding file %s: %v", file, err)
 	}
 }

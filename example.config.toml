@@ -1,0 +1,14 @@
+[google]
+api_key = ""
+
+[discord]
+prefix = "!"
+token = ""
+owner_id = ""
+
+[twitch]
+client_id = ""
+
+[database]
+dialect = "sqlite3"
+connection_string = "test.db"
